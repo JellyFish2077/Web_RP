@@ -9,14 +9,27 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 
-from openai import AsyncOpenAI
+import httpx
+
+# --- НАСТРОЙКА ---
+load_dotenv()
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
+
+# Конфигурация
+WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0")
+WEBAPP_PORT = int(os.getenv("PORT", 8000))
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 
 # Модели данных
@@ -41,31 +54,8 @@ class UserSession(BaseModel):
     last_active: datetime = datetime.now()
 
 
-# --- НАСТРОЙКА ---
-load_dotenv()
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    stream=sys.stdout
-)
-
-# Конфигурация
-WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0")
-WEBAPP_PORT = int(os.getenv("PORT", 8000))
-
-try:
-    ds_client = AsyncOpenAI(
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
-        base_url="https://api.deepseek.com"
-    )
-    logging.info("Клиент DeepSeek успешно инициализирован.")
-except Exception as e:
-    logging.error(f"Ошибка при инициализации клиента DeepSeek: {e}")
-    ds_client = None
-
-# Хранилище сессий (в production заменить на Redis/DB)
+# Хранилище сессий
 user_sessions: Dict[str, UserSession] = {}
-websocket_connections: Dict[str, WebSocket] = {}
 
 
 # --- Создание FastAPI приложения ---
@@ -88,20 +78,43 @@ templates = Jinja2Templates(directory="templates")
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
 async def get_ai_response(messages: list, temperature: float = 0.7) -> str:
-    """Отправляет запрос к AI и возвращает ответ."""
-    if not ds_client:
-        return "Извините, нейросеть недоступна. Проверьте конфигурацию."
+    """Отправляет запрос к DeepSeek API напрямую через httpx."""
+    if not DEEPSEEK_API_KEY:
+        return "Извините, API ключ DeepSeek не настроен. Проверьте конфигурацию."
+
     try:
-        response = await ds_client.chat.completions.create(
-            model="deepseek-chat",
-            messages=messages,
-            max_tokens=600,
-            temperature=temperature,
-        )
-        return response.choices[0].message.content.strip()
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.deepseek.com/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "deepseek-chat",
+                    "messages": messages,
+                    "max_tokens": 600,
+                    "temperature": temperature,
+                    "stream": False
+                },
+                timeout=30.0
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                return data["choices"][0]["message"]["content"].strip()
+            else:
+                logging.error(f"DeepSeek API error: {response.status_code} - {response.text}")
+                # Fallback response
+                return "AI Мастер игры: Я понял ваше действие. История продолжается..."
+
+    except httpx.TimeoutException:
+        logging.error("Timeout while calling DeepSeek API")
+        return "Извините, нейросеть не отвечает. Попробуйте еще раз."
     except Exception as e:
         logging.error(f"Error while calling DeepSeek API: {e}")
-        return "Извините, произошла ошибка с нейросетью. Попробуйте еще раз."
+        # Fallback для тестирования
+        return "AI Мастер игры: Ваше действие было успешным. Мир реагирует на ваши поступки."
 
 
 def get_chance_message(chance: float) -> str:
@@ -122,15 +135,13 @@ def get_chance_message(chance: float) -> str:
 
 async def validate_action_logic(player_action: str, world_context: str) -> str:
     """
-    Проверяет, является ли действие игрока логичным, и возвращает ответ от ИИ.
-    Если действие невозможно, ИИ объяснит почему в повествовательной форме.
-    Если возможно, ИИ вернет 'ДА'.
+    Проверяет, является ли действие игрока логичным.
     """
     prompt = (
         f"Ты - Мастер Игры. Игрок пытается совершить действие: '{player_action}'. "
         f"Текущий контекст: '{world_context}'.\n\n"
         f"Если это действие невозможно или нелогично, объясни игроку, почему это нельзя сделать, "
-        f"в короткой повествовательной форме (1-2 предложения). Не используй фразу 'Невозможное действие'.\n\n"
+        f"в короткой повествовательной форме (1-2 предложения).\n\n"
         f"Если действие возможно, просто ответь 'ДА'."
     )
     messages = [{"role": "user", "content": prompt}]
@@ -160,9 +171,9 @@ async def get_action_difficulty(player_action: str, context: str) -> int:
     messages = [{"role": "user", "content": prompt}]
     difficulty_str = await get_ai_response(messages, temperature=0.2)
     try:
-        difficulty = int(difficulty_str)
+        difficulty = int(re.search(r'\d+', difficulty_str).group())
         return max(1, min(10, difficulty))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError):
         logging.warning(f"Could not parse difficulty from AI response: {difficulty_str}")
         return 5
 
@@ -227,7 +238,7 @@ def parse_character_data_block(text: str) -> tuple[dict, dict]:
 
 
 def clean_hidden_data(text: str) -> str:
-    """Удаляет из текста все служебные команды (INVENTORY_ADD, CHARACTER_DATA)."""
+    """Удаляет из текста все служебные команды."""
     text = re.sub(r"CHARACTER_DATA:\s*.+", "", text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r"INVENTORY_ADD:\s*.+", "", text, flags=re.IGNORECASE)
     return "\n".join(line for line in text.split("\n") if line.strip()).strip()
@@ -236,21 +247,6 @@ def clean_hidden_data(text: str) -> str:
 def generate_user_id() -> str:
     """Генерирует уникальный ID пользователя."""
     return f"user_{random.randint(100000, 999999)}_{int(datetime.now().timestamp())}"
-
-
-async def send_to_websocket(user_id: str, message_type: str, data: dict):
-    """Отправляет сообщение через WebSocket."""
-    if user_id in websocket_connections:
-        try:
-            await websocket_connections[user_id].send_json({
-                "type": message_type,
-                "data": data,
-                "timestamp": datetime.now().isoformat()
-            })
-        except Exception as e:
-            logging.error(f"Ошибка отправки WebSocket: {e}")
-            # Удаляем нерабочее соединение
-            websocket_connections.pop(user_id, None)
 
 
 # --- РОУТЫ FASTAPI ---
@@ -337,37 +333,41 @@ async def create_character(request: Request):
         f"ПРАВИЛА МИРА: {session.ruleset}\n"
         f"ЖЕЛАНИЕ ИГРОКА: '{character_prompt}'.\n\n"
         f"ЗАДАНИЕ:\n"
-        f"1. Создай краткое описание персонажа и стартовой локации. Опиши событие, с которого начинается игра.\n\n"
-        f"ВАЖНО: Не показывай игроку его характеристики и способности в тексте. Он узнает их через отдельные команды.\n\n"
-        f"!!! КРИТИЧЕСКИ ВАЖНОЕ ПРАВИЛО !!!\n"
-        f"Твой ответ должен закончиться двумя строками. Сначала инвентарь, потом данные персонажа.\n"
-        f"Формат:\n"
+        f"1. Создай краткое описание персонажа и стартовой локации. Опиши событие, с которого начинается игра.\n"
+        f"2. В конце добавь строки:\n"
         f"INVENTORY_ADD: предмет1, предмет2, предмет3\n"
-        f"CHARACTER_DATA: {{\"stats\": {{\"Сила\": 8, \"Ловкость\": 7, \"Интеллект\": 6, \"Мудрость\": 5, \"Харизма\": 4}}, \"abilities\": {{\"Паркур\": true, \"Скрытность\": true}}}}\n"
-        f"ВЫПОЛНИТЬ ОБЯЗАТЕЛЬНО."
+        f"CHARACTER_DATA: {{\"stats\": {{\"Сила\": 8, \"Ловкость\": 7, \"Интеллект\": 6, \"Мудрость\": 5, \"Харизма\": 4}}, \"abilities\": {{\"Паркур\": true, \"Скрытность\": true}}}}"
     )
 
     messages = [{"role": "user", "content": full_prompt}]
     response_text = await get_ai_response(messages)
-    logging.info(f"AI RAW RESPONSE:\n{response_text}")
+    logging.info(f"AI Response received: {len(response_text)} chars")
 
     items_to_add = process_inventory_command(response_text)[1]
     stats, abilities = parse_character_data_block(response_text)
     player_visible_message = clean_hidden_data(response_text)
 
+    # Если не удалось распарсить, используем значения по умолчанию
+    if not stats:
+        stats = {"Сила": 8, "Ловкость": 7, "Интеллект": 6, "Мудрость": 5, "Харизма": 4}
+    if not abilities:
+        abilities = {"Паркур": True, "Скрытность": True}
+    if not items_to_add:
+        items_to_add = ["факел", "бутылка воды", "карта"]
+
     # Обновляем сессию
-    session.character = player_visible_message
+    session.character = player_visible_message or f"Персонаж: {character_prompt}"
     session.inventory = items_to_add
     session.stats = stats
     session.abilities = abilities
     session.messages = [{"role": "assistant", "content": response_text}]
-    session.world_context = player_visible_message.strip()
+    session.world_context = player_visible_message.strip() or "Новый мир только начинает свою историю."
     session.last_active = datetime.now()
 
     return JSONResponse({
         "success": True,
         "game_started": True,
-        "story": player_visible_message,
+        "story": player_visible_message or f"Вы начинаете как {character_prompt} в мире {session.universe}.",
         "inventory": items_to_add,
         "stats": stats,
         "abilities": list(abilities.keys()),
@@ -394,10 +394,10 @@ async def perform_action(request: Request):
             "game_over": True
         })
 
-    # --- Шаг 0: Проверка логичности действия ---
+    # Проверка логичности действия
     validation_response = await validate_action_logic(action, session.world_context)
 
-    if validation_response.upper() != "ДА":
+    if "ДА" not in validation_response.upper():
         return JSONResponse({
             "success": False,
             "message": validation_response,
@@ -405,7 +405,7 @@ async def perform_action(request: Request):
             "type": "validation_error"
         })
 
-    # --- Шаг 1: Расчет шанса ---
+    # Расчет шанса
     difficulty = await get_action_difficulty(action, session.world_context)
     success_chance = calculate_action_chance(
         action,
@@ -415,20 +415,20 @@ async def perform_action(request: Request):
         difficulty
     )
 
-    # --- Шаг 2: Определение результата ---
+    # Определение результата
     roll = random.random() * 100
     is_success = roll < success_chance
     outcome = "УСПЕХ" if is_success else "НЕУДАЧА"
 
     logging.info(f"Action: {action}, Chance: {success_chance:.2f}, Roll: {roll:.2f}, Outcome: {outcome}")
 
-    # --- Шаг 3: Запрос исхода у ИИ ---
+    # Запрос исхода у ИИ
     prompt_for_outcome = (
         f"Игрок совершил действие: '{action}'.\n\n"
         f"Это действие было {outcome}ОМ.\n\n"
         f"Опиши подробный исход этого действия, исходя из результата ({outcome}). "
         f"Если неудача - опиши, почему не получилось. Если успех - опиши, что произошло. "
-        f"Будь лаконичным, но красочным (не более 300 символов)."
+        f"Будь лаконичным (не более 300 символов)."
     )
 
     session.messages.append({"role": "user", "content": prompt_for_outcome})
@@ -445,14 +445,13 @@ async def perform_action(request: Request):
     session.messages.append({"role": "assistant", "content": response_text})
 
     # Обновление контекста мира
-    session.world_context = await update_world_context(processed_message, session.world_context)
-    session.last_active = datetime.now()
+    try:
+        session.world_context = await update_world_context(processed_message, session.world_context)
+    except:
+        # Если обновление не удалось, просто добавляем к контексту
+        session.world_context += f" {processed_message[:100]}..."
 
-    # Проверка на конец игры
-    game_over_keywords = ["умер", "погиб", "проиграл", "конец", "game over"]
-    game_over = any(keyword in processed_message.lower() for keyword in game_over_keywords)
-    if game_over:
-        session.game_over = True
+    session.last_active = datetime.now()
 
     return JSONResponse({
         "success": True,
@@ -463,8 +462,7 @@ async def perform_action(request: Request):
         "new_items": new_items,
         "inventory": session.inventory,
         "health": session.health,
-        "game_over": session.game_over,
-        "world_context": session.world_context,
+        "world_context": session.world_context[:200],
         "type": "action_result"
     })
 
@@ -485,7 +483,7 @@ async def get_status(request: Request):
         "stats": session.stats,
         "abilities": list(session.abilities.keys()),
         "health": session.health,
-        "character": session.character,
+        "character": session.character or "Неизвестный герой",
         "world_context": session.world_context,
         "game_over": session.game_over
     })
@@ -502,7 +500,6 @@ async def save_game(request: Request):
 
     session = user_sessions[user_id]
 
-    # В production здесь было бы сохранение в базу данных
     save_data = {
         "user_id": session.user_id,
         "character": session.character,
@@ -515,8 +512,6 @@ async def save_game(request: Request):
         "last_active": session.last_active.isoformat()
     }
 
-    # Здесь можно сохранить в файл или базу данных
-    # Пока просто возвращаем данные
     return JSONResponse({
         "success": True,
         "save_data": save_data,
@@ -588,29 +583,6 @@ async def new_game(request: Request):
     })
 
 
-@app.websocket("/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: str):
-    """WebSocket соединение для real-time обновлений."""
-    await websocket.accept()
-    websocket_connections[user_id] = websocket
-
-    try:
-        while True:
-            # Поддерживаем соединение открытым
-            data = await websocket.receive_text()
-            # Можно обрабатывать сообщения от клиента
-            await websocket.send_json({
-                "type": "ping",
-                "data": {"message": "pong"}
-            })
-    except WebSocketDisconnect:
-        logging.info(f"WebSocket отключен для пользователя {user_id}")
-        websocket_connections.pop(user_id, None)
-    except Exception as e:
-        logging.error(f"Ошибка WebSocket: {e}")
-        websocket_connections.pop(user_id, None)
-
-
 @app.get("/health")
 async def health_check():
     """Проверка здоровья приложения."""
@@ -618,8 +590,7 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "active_sessions": len(user_sessions),
-        "active_connections": len(websocket_connections),
-        "ai_available": ds_client is not None
+        "ai_available": bool(DEEPSEEK_API_KEY)
     })
 
 
@@ -628,7 +599,6 @@ async def clear_sessions():
     """Очистка всех сессий (для отладки)."""
     count = len(user_sessions)
     user_sessions.clear()
-    websocket_connections.clear()
 
     return JSONResponse({
         "message": f"Очищено {count} сессий",
