@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RoleVerse - Игра</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/game.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="game-container">
+        <!-- Панель управления -->
+        <div class="game-controls">
+            <button id="back-to-menu" class="btn btn-secondary">
+                <i class="fas fa-home"></i> Меню
+            </button>
+            <div class="player-info">
+                <span id="player-health">❤️ 100/100</span>
+                <span id="player-level">🎯 Уровень 1</span>
+            </div>
+            <button id="save-game-btn" class="btn btn-secondary">
+                <i class="fas fa-save"></i> Сохранить
+            </button>
+        </div>
+
+        <div class="game-layout">
+            <!-- Основная игровая панель -->
+            <div class="game-main">
+                <!-- История игры -->
+                <div class="game-story" id="game-story">
+                    <div class="welcome-message">
+                        <h3><i class="fas fa-dragon"></i> Добро пожаловать в RoleVerse!</h3>
+                        <p>Начните новую игру или загрузите сохраненную.</p>
+                    </div>
+                </div>
+
+                <!-- Ввод действий -->
+                <div class="action-input">
+                    <input type="text" id="action-input"
+                           placeholder="Что вы хотите сделать? Например: 'осмотреть комнату', 'поговорить со стражником'..."
+                           autocomplete="off">
+                    <button id="send-action" class="btn btn-primary">
+                        <i class="fas fa-paper-plane"></i> Действовать
+                    </button>
+                </div>
+
+                <!-- Быстрые действия -->
+                <div class="quick-actions">
+                    <button class="quick-btn" data-action="осмотреть окрестности">
+                        <i class="fas fa-search"></i> Осмотреть
+                    </button>
+                    <button class="quick-btn" data-action="проверить инвентарь">
+                        <i class="fas fa-backpack"></i> Инвентарь
+                    </button>
+                    <button class="quick-btn" data-action="поговорить с ближайшим NPC">
+                        <i class="fas fa-comments"></i> Поговорить
+                    </button>
+                    <button class="quick-btn" data-action="исследовать дальше">
+                        <i class="fas fa-compass"></i> Исследовать
+                    </button>
+                </div>
+            </div>
+
+            <!-- Боковая панель -->
+            <div class="game-sidebar">
+                <!-- Выбор вселенной -->
+                <div class="universe-selector" id="universe-selector">
+                    <h4><i class="fas fa-globe"></i> Выберите вселенную</h4>
+                    <div class="universe-options">
+                        <div class="universe-option" data-universe="fantasy">
+                            <i class="fas fa-hat-wizard"></i>
+                            <span>Фэнтези</span>
+                        </div>
+                        <div class="universe-option" data-universe="cyberpunk">
+                            <i class="fas fa-robot"></i>
+                            <span>Киберпанк</span>
+                        </div>
+                        <div class="universe-option" data-universe="space">
+                            <i class="fas fa-rocket"></i>
+                            <span>Космоопера</span>
+                        </div>
+                        <div class="universe-option" data-universe="custom">
+                            <i class="fas fa-palette"></i>
+                            <span>Своя</span>
+                        </div>
+                    </div>
+
+                    <div id="custom-universe" class="hidden">
+                        <textarea id="custom-rules" placeholder="Опишите правила вашей вселенной..."></textarea>
+                    </div>
+                </div>
+
+                <!-- Создание персонажа -->
+                <div class="character-creator hidden" id="character-creator">
+                    <h4><i class="fas fa-user"></i> Создайте персонажа</h4>
+                    <input type="text" id="character-input"
+                           placeholder="Например: 'молодой маг', 'кибер-хакер', 'космический пират'...">
+                    <button id="create-character" class="btn btn-primary">
+                        <i class="fas fa-magic"></i> Создать
+                    </button>
+                </div>
+
+                <!-- Информация о персонаже -->
+                <div class="character-info hidden" id="character-info">
+                    <h4><i class="fas fa-user-circle"></i> Персонаж</h4>
+                    <div id="character-details">
+                        <!-- Загружается динамически -->
+                    </div>
+                </div>
+
+                <!-- Инвентарь -->
+                <div class="inventory-panel hidden" id="inventory-panel">
+                    <h4><i class="fas fa-backpack"></i> Инвентарь</h4>
+                    <div class="inventory-items" id="inventory-items">
+                        <!-- Загружается динамически -->
+                    </div>
+                </div>
+
+                <!-- Характеристики -->
+                <div class="stats-panel hidden" id="stats-panel">
+                    <h4><i class="fas fa-chart-bar"></i> Характеристики</h4>
+                    <div class="stats-list" id="stats-list">
+                        <!-- Загружается динамически -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Нижняя панель -->
+        <div class="game-bottom">
+            <div class="game-tabs">
+                <button class="tab-btn active" data-tab="character">
+                    <i class="fas fa-user"></i> Персонаж
+                </button>
+                <button class="tab-btn" data-tab="inventory">
+                    <i class="fas fa-backpack"></i> Инвентарь
+                </button>
+                <button class="tab-btn" data-tab="stats">
+                    <i class="fas fa-chart-bar"></i> Характеристики
+                </button>
+                <button class="tab-btn" data-tab="settings">
+                    <i class="fas fa-cog"></i> Настройки
+                </button>
+            </div>
+
+            <div class="game-status">
+                <span id="game-status-text">Готов к игре</span>
+                <div class="connection-status">
+                    <span id="connection-dot" class="dot connected"></span>
+                    <span id="connection-text">Online</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальные окна -->
+    <div id="save-modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h3><i class="fas fa-save"></i> Сохранить игру</h3>
+            <p>Скопируйте данные сохранения:</p>
+            <textarea id="save-data" readonly rows="6"></textarea>
+            <button id="copy-save" class="btn btn-secondary">
+                <i class="fas fa-copy"></i> Копировать
+            </button>
+        </div>
+    </div>
+
+    <div id="load-modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h3><i class="fas fa-upload"></i> Загрузить игру</h3>
+            <p>Вставьте данные сохранения:</p>
+            <textarea id="load-data" rows="6"></textarea>
+            <button id="load-save" class="btn btn-primary">
+                <i class="fas fa-upload"></i> Загрузить
+            </button>
+        </div>
+    </div>
+
+    <script src="/static/js/game.js"></script>
+</body>
+</html>

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RoleVerse - AI RPG Game</title>
+    <link href="https://fonts.googleapis.com/css2?family=MedievalSharp&family=Orbitron&family=Roboto&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1><i class="fas fa-dragon"></i> RoleVerse</h1>
+            <p class="subtitle">Текстовый RPG с искусственным интеллектом</p>
+        </header>
+
+        <main class="main-content">
+            <div class="hero-section">
+                <div class="hero-text">
+                    <h2>Погрузитесь в мир приключений</h2>
+                    <p>RoleVerse - это интерактивная текстовая RPG, где искусственный интеллект создает уникальные миры, персонажей и сюжеты специально для вас. Каждое ваше действие меняет историю!</p>
+
+                    <div class="features">
+                        <div class="feature">
+                            <i class="fas fa-brain"></i>
+                            <h3>AI Мастер</h3>
+                            <p>ИИ создает мир и реагирует на ваши действия</p>
+                        </div>
+                        <div class="feature">
+                            <i class="fas fa-universe"></i>
+                            <h3>Разные вселенные</h3>
+                            <p>Фэнтези, киберпанк, космоопера или своя вселенная</p>
+                        </div>
+                        <div class="feature">
+                            <i class="fas fa-dice"></i>
+                            <h3>Динамичная система</h3>
+                            <p>Шансы успеха, инвентарь, характеристики персонажа</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="hero-action">
+                    <div class="action-card">
+                        <h3>Начать приключение</h3>
+                        <p>Создайте персонажа и начните свою историю</p>
+                        <button id="start-game-btn" class="btn btn-primary">
+                            <i class="fas fa-play"></i> Новая игра
+                        </button>
+
+                        <div class="quick-stats">
+                            <p><i class="fas fa-users"></i> Активные игроки: <span id="player-count">0</span></p>
+                            <p><i class="fas fa-gamepad"></i> Сыграно игр: <span id="games-count">0</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="game-section" class="game-section hidden">
+                <!-- Сюда будет загружаться игра -->
+            </div>
+
+            <div class="instructions">
+                <h3><i class="fas fa-book"></i> Как играть?</h3>
+                <ol>
+                    <li>Начните новую игру и выберите вселенную</li>
+                    <li>Опишите персонажа (например: "молодой маг", "кибер-хакер")</li>
+                    <li>ИИ создаст мир и начнет историю</li>
+                    <li>Взаимодействуйте с миром через текстовые команды</li>
+                    <li>Следите за инвентарем и характеристиками</li>
+                    <li>Каждое действие имеет шанс успеха</li>
+                </ol>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <p>RoleVerse © 2024 | AI RPG Game</p>
+            <p class="footer-links">
+                <a href="#" id="about-btn">О проекте</a> |
+                <a href="#" id="api-btn">API</a> |
+                <a href="https://github.com" target="_blank">GitHub</a>
+            </p>
+        </footer>
+    </div>
+
+    <!-- Модальные окна -->
+    <div id="about-modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h3><i class="fas fa-info-circle"></i> О проекте</h3>
+            <p>RoleVerse - это веб-приложение для текстовых RPG с использованием искусственного интеллекта (DeepSeek API) для генерации контента и реакции на действия игрока.</p>
+            <p>Проект создан для демонстрации возможностей AI в создании интерактивных игровых миров.</p>
+            <p><strong>Технологии:</strong> FastAPI, DeepSeek API, WebSocket, JavaScript</p>
+        </div>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

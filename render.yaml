@@ -1,15 +1,13 @@
 services:
   - type: web
-    name: roleverse-bot
+    name: roleverse-web
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn main:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT}
+    startCommand: uvicorn main:app --host 0.0.0.0 --port ${PORT}
     envVars:
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
       - key: DEEPSEEK_API_KEY
         sync: false
-      - key: WEBHOOK_SECRET
-        generateValue: true
+      - key: PYTHON_VERSION
+        value: 3.12.0
     healthCheckPath: /health
     autoDeploy: true

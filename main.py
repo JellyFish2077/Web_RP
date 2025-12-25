@@ -5,27 +5,41 @@ import sys
 import re
 import random
 import json
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from datetime import datetime
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from contextlib import asynccontextmanager
+from pydantic import BaseModel
 
-from aiogram import Bot, Dispatcher, Router, F
-from aiogram.filters import CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message, ReplyKeyboardRemove, Update, WebhookInfo
-from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiohttp import web
 from openai import AsyncOpenAI
 
-import keyboards as kb
-import states as st
-import universes as uv
+
+# Модели данных
+class UserAction(BaseModel):
+    user_id: str
+    action: str
+
+
+class UserSession(BaseModel):
+    user_id: str
+    character: Optional[str] = None
+    inventory: list = []
+    health: int = 100
+    stats: Dict = {}
+    abilities: Dict = {}
+    messages: list = []
+    world_context: str = ""
+    universe: Optional[str] = None
+    ruleset: Optional[str] = None
+    game_over: bool = False
+    created_at: datetime = datetime.now()
+    last_active: datetime = datetime.now()
+
 
 # --- НАСТРОЙКА ---
 load_dotenv()
@@ -35,23 +49,9 @@ logging.basicConfig(
     stream=sys.stdout
 )
 
-# Конфигурация вебхука
-WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "my-secret-token")
+# Конфигурация
 WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0")
 WEBAPP_PORT = int(os.getenv("PORT", 8000))
-
-# Инициализация бота
-bot = Bot(
-    token=os.getenv("TELEGRAM_BOT_TOKEN"),
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
-
-# Инициализация хранилища и диспетчера
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
-router = Router()
 
 try:
     ds_client = AsyncOpenAI(
@@ -63,31 +63,26 @@ except Exception as e:
     logging.error(f"Ошибка при инициализации клиента DeepSeek: {e}")
     ds_client = None
 
+# Хранилище сессий (в production заменить на Redis/DB)
+user_sessions: Dict[str, UserSession] = {}
+websocket_connections: Dict[str, WebSocket] = {}
+
 
 # --- Создание FastAPI приложения ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Контекстный менеджер для управления жизненным циклом приложения.
-    """
-    # Запуск приложения
-    await bot.set_webhook(
-        url=f"{WEBHOOK_URL}{WEBHOOK_PATH}",
-        secret_token=WEBHOOK_SECRET,
-        drop_pending_updates=True
-    )
-    webhook_info = await bot.get_webhook_info()
-    logging.info(f"Webhook установлен: {webhook_info.url}")
-
+    """Контекстный менеджер для управления жизненным циклом приложения."""
     yield
 
     # Завершение работы приложения
-    await bot.delete_webhook()
-    await bot.session.close()
-    logging.info("Бот остановлен, вебхук удален")
+    logging.info("Приложение останавливается")
 
 
-app = FastAPI(title="RoleVerse Bot", lifespan=lifespan)
+app = FastAPI(title="RoleVerse - AI RPG Game", lifespan=lifespan)
+
+# Статические файлы и шаблоны
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
@@ -238,75 +233,108 @@ def clean_hidden_data(text: str) -> str:
     return "\n".join(line for line in text.split("\n") if line.strip()).strip()
 
 
-# --- ОБРАБОТЧИКИ СОСТОЯНИЙ И КОМАНД ---
-
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer(
-        "<b>🌌 Добро пожаловать в RoleVerse Bot!</b>\n\n"
-        "Готовы к приключениям? Выберите, как хотите начать:",
-        reply_markup=kb.main_menu_kb
-    )
-    await state.set_state(st.GameStates.main_menu)
+def generate_user_id() -> str:
+    """Генерирует уникальный ID пользователя."""
+    return f"user_{random.randint(100000, 999999)}_{int(datetime.now().timestamp())}"
 
 
-@router.message(st.GameStates.main_menu, F.text == "🎲 Быстрая игра")
-async def simple_game_start(message: Message, state: FSMContext):
-    await state.set_state(st.GameStates.choosing_universe)
-    await message.answer(
-        "Отличный выбор! <b>Быстрая игра</b> погрузит вас в готовый мир.\n\n"
-        "Выберите вселенную для вашего приключения:",
-        reply_markup=kb.universe_choice_kb
-    )
+async def send_to_websocket(user_id: str, message_type: str, data: dict):
+    """Отправляет сообщение через WebSocket."""
+    if user_id in websocket_connections:
+        try:
+            await websocket_connections[user_id].send_json({
+                "type": message_type,
+                "data": data,
+                "timestamp": datetime.now().isoformat()
+            })
+        except Exception as e:
+            logging.error(f"Ошибка отправки WebSocket: {e}")
+            # Удаляем нерабочее соединение
+            websocket_connections.pop(user_id, None)
 
 
-@router.message(st.GameStates.main_menu, F.text == "🧠 Песочница")
-async def advanced_game_start(message: Message, state: FSMContext):
-    await message.answer(
-        "<b>Песочница</b> — это полный творческий контроль.\n\n"
-        "Здесь вы — создатель. Определите законы мира и создайте легендарного героя (или злодея!).",
-        reply_markup=kb.advanced_menu_kb
-    )
-    await state.set_state(st.GameStates.creating_character)
+# --- РОУТЫ FASTAPI ---
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    """Главная страница."""
+    return templates.TemplateResponse("index.html", {"request": request})
 
 
-@router.message(st.GameStates.main_menu, F.text == "❌ Выйти")
-async def exit_handler(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("До встречи в других мирах! ⭐", reply_markup=ReplyKeyboardRemove())
+@app.get("/game", response_class=HTMLResponse)
+async def game_page(request: Request):
+    """Страница игры."""
+    return templates.TemplateResponse("game.html", {"request": request})
 
 
-@router.message(st.GameStates.choosing_universe, F.text.in_(uv.UNIVERSES.keys()))
-async def choose_universe(message: Message, state: FSMContext):
-    universe_data = uv.UNIVERSES[message.text]
-    await state.update_data(universe=message.text, ruleset=universe_data['ruleset'])
-    await message.answer(
-        f"Вы выбрали вселенную <b>{message.text}</b>.\n\n"
-        "Теперь опишите в двух словах, какого персонажа вы хотели бы сыграть.\n\n"
-        "<i>Например: 'циничный наемник', 'молодой и амбициозный маг', 'изобретательная воровка'.</i>",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    await state.set_state(st.GameStates.creating_character)
+@app.post("/api/start-game")
+async def start_game():
+    """Начинает новую игру и создает сессию."""
+    user_id = generate_user_id()
+    session = UserSession(user_id=user_id)
+    user_sessions[user_id] = session
+
+    return JSONResponse({
+        "user_id": user_id,
+        "message": "Новая игра создана! Выберите вселенную.",
+        "universes": [
+            {"id": "fantasy", "name": "🧙 Фэнтези", "description": "Мир магии и драконов"},
+            {"id": "cyberpunk", "name": "🚀 Киберпанк", "description": "Технологии и корпорации"},
+            {"id": "space", "name": "🪐 Космоопера", "description": "Межзвездные путешествия"},
+            {"id": "custom", "name": "🎨 Своя вселенная", "description": "Создайте свой мир"}
+        ]
+    })
 
 
-@router.message(st.GameStates.choosing_universe, F.text == "⬅️ Назад")
-async def back_to_main_from_universe(message: Message, state: FSMContext):
-    await cmd_start(message, state)
+@app.post("/api/choose-universe")
+async def choose_universe(request: Request):
+    """Выбор вселенной."""
+    data = await request.json()
+    user_id = data.get("user_id")
+    universe_id = data.get("universe_id")
+
+    if user_id not in user_sessions:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+
+    session = user_sessions[user_id]
+
+    # Определяем правила вселенной
+    universes = {
+        "fantasy": "Классическое фэнтези с магами, драконами и древними артефактами. Магия управляется мантрой и жезлами.",
+        "cyberpunk": "Мир недалекого будущего, где технологии правят миром, кибернетические импланты - обыденность.",
+        "space": "Эпоха межзвездных путешествий, инопланетных цивилизаций и космических битв.",
+        "custom": data.get("custom_rules", "Вы сами определяете законы мира.")
+    }
+
+    session.universe = universe_id
+    session.ruleset = universes.get(universe_id, "Правила определены игроком.")
+
+    return JSONResponse({
+        "success": True,
+        "message": f"Вселенная выбрана! Теперь опишите своего персонажа.",
+        "need_character": True
+    })
 
 
-@router.message(st.GameStates.creating_character)
-async def start_game_from_prompt(message: Message, state: FSMContext):
-    user_data = await state.get_data()
-    character_prompt = message.text
-    ruleset = user_data.get('ruleset', "Правила определены игроком.")
+@app.post("/api/create-character")
+async def create_character(request: Request):
+    """Создание персонажа."""
+    data = await request.json()
+    user_id = data.get("user_id")
+    character_prompt = data.get("character_prompt")
 
-    await message.answer("Отлично! Создаю мир и вашего персонажа... Это может занять несколько секунд.",
-                         reply_markup=ReplyKeyboardRemove())
+    if user_id not in user_sessions:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
 
+    session = user_sessions[user_id]
+
+    if not character_prompt:
+        raise HTTPException(status_code=400, detail="Необходимо описание персонажа")
+
+    # Создаем персонажа с помощью AI
     full_prompt = (
         f"Ты - Мастер Игры. Создай начало истории.\n\n"
-        f"ПРАВИЛА МИРА: {ruleset}\n"
+        f"ПРАВИЛА МИРА: {session.ruleset}\n"
         f"ЖЕЛАНИЕ ИГРОКА: '{character_prompt}'.\n\n"
         f"ЗАДАНИЕ:\n"
         f"1. Создай краткое описание персонажа и стартовой локации. Опиши событие, с которого начинается игра.\n\n"
@@ -327,313 +355,291 @@ async def start_game_from_prompt(message: Message, state: FSMContext):
     stats, abilities = parse_character_data_block(response_text)
     player_visible_message = clean_hidden_data(response_text)
 
-    initial_world_context = player_visible_message.strip()
+    # Обновляем сессию
+    session.character = player_visible_message
+    session.inventory = items_to_add
+    session.stats = stats
+    session.abilities = abilities
+    session.messages = [{"role": "assistant", "content": response_text}]
+    session.world_context = player_visible_message.strip()
+    session.last_active = datetime.now()
 
-    await state.update_data(
-        character=player_visible_message,
-        inventory=items_to_add,
-        health=100,
-        stats=stats,
-        abilities=abilities,
-        messages=[{"role": "assistant", "content": response_text}],
-        world_context=initial_world_context,
-        game_over=False
-    )
-    logging.info(f"STATE UPDATE: inventory={items_to_add}, stats={stats}, abilities={abilities}")
-
-    await state.set_state(st.GameStates.playing)
-    await message.answer(player_visible_message, reply_markup=kb.gameplay_kb)
-
-
-@router.message(st.GameStates.creating_character, F.text == "▶️ Начать приключение")
-async def start_advanced_game(message: Message, state: FSMContext):
-    data = await state.get_data()
-    if not data.get('character') or not data.get('ruleset'):
-        await message.answer("Пожалуйста, сначала создайте персонажа и опишите мир!")
-        return
-    await start_game_from_prompt(message, state)
+    return JSONResponse({
+        "success": True,
+        "game_started": True,
+        "story": player_visible_message,
+        "inventory": items_to_add,
+        "stats": stats,
+        "abilities": list(abilities.keys()),
+        "health": session.health
+    })
 
 
-@router.message(st.GameStates.creating_character, F.text == "⬅️ Назад")
-async def back_to_main_from_advanced(message: Message, state: FSMContext):
-    await cmd_start(message, state)
+@app.post("/api/action")
+async def perform_action(request: Request):
+    """Выполнение действия в игре."""
+    data = await request.json()
+    user_id = data.get("user_id")
+    action = data.get("action")
 
+    if user_id not in user_sessions:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
 
-@router.message(st.GameStates.playing, F.text == "🎒 Инвентарь")
-async def show_inventory(message: Message, state: FSMContext):
-    user_data = await state.get_data()
-    inventory = user_data.get('inventory', [])
-    if not inventory:
-        await message.answer("🎒 <b>Ваш инвентарь пуст.</b>")
-    else:
-        inventory_list = "\n".join(f"• {item}" for item in inventory)
-        await message.answer(f"🎒 <b>Ваш инвентарь:</b>\n\n{inventory_list}")
+    session = user_sessions[user_id]
 
+    if session.game_over:
+        return JSONResponse({
+            "success": False,
+            "message": "Игра окончена. Начните новую игру.",
+            "game_over": True
+        })
 
-@router.message(st.GameStates.playing, F.text == "📊 Характеристики")
-async def show_status(message: Message, state: FSMContext):
-    user_data = await state.get_data()
-    character = user_data.get('character', 'Неизвестен')
-    health = user_data.get('health', 100)
-    stats = user_data.get('stats', {})
-
-    status_text = f"📊 <b>Характеристики:</b>\n\n<i>{character}</i>\n\n❤️ Здоровье: {health}/100"
-
-    if stats:
-        status_text += "\n\n<b>Параметры:</b>"
-        for stat_name, stat_value in stats.items():
-            status_text += f"\n• {stat_name}: {stat_value}"
-
-    await message.answer(status_text)
-
-
-@router.message(st.GameStates.playing, F.text == "💬 Навыки")
-async def show_skills(message: Message, state: FSMContext):
-    user_data = await state.get_data()
-    abilities = user_data.get('abilities', {})
-
-    if not abilities:
-        await message.answer("💬 <b>У вашего персонажа нет особых навыков.</b>")
-    else:
-        skills_text = "💬 <b>Навыки вашего персонажа:</b>\n\n"
-        for ability_name in abilities.keys():
-            skills_text += f"• {ability_name}\n"
-
-        await message.answer(skills_text)
-
-
-@router.message(st.GameStates.playing, F.text == "⏸️ Меню")
-async def pause_game(message: Message, state: FSMContext):
-    await message.answer("Игра на паузе. Вы можете вернуться в главное меню.", reply_markup=kb.main_menu_kb)
-    await state.set_state(st.GameStates.main_menu)
-
-
-@router.message(st.GameStates.playing)
-async def gameplay_handler(message: Message, state: FSMContext):
-    user_data = await state.get_data()
-    messages_history = user_data.get('messages', [])
-    world_context = user_data.get('world_context', 'Мир только начинает создаваться.')
-
-    if not messages_history:
-        await message.answer(
-            "Что-то пошло не так, история диалога утеряна. Пожалуйста, начните игру заново с помощью /start.")
-        await state.clear()
-        return
-
-    player_action = message.text
-
-    # --- Шаг 0: Проверка логичности действия (ИЗМЕНЕНО) ---
-    validation_response = await validate_action_logic(player_action, world_context)
+    # --- Шаг 0: Проверка логичности действия ---
+    validation_response = await validate_action_logic(action, session.world_context)
 
     if validation_response.upper() != "ДА":
-        # Отправляем ответ от ИИ напрямую, без префикса
-        await message.answer(validation_response)
-        return
+        return JSONResponse({
+            "success": False,
+            "message": validation_response,
+            "action_result": validation_response,
+            "type": "validation_error"
+        })
 
-    # --- Шаг 1: Ожидание и оценка ---
-    wait_message = await message.answer("🎲 <i>Оцениваю ситуацию и рассчитываю шансы...</i>")
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    # --- Шаг 1: Расчет шанса ---
+    difficulty = await get_action_difficulty(action, session.world_context)
+    success_chance = calculate_action_chance(
+        action,
+        session.stats,
+        session.abilities,
+        session.inventory,
+        difficulty
+    )
 
-    # --- Шаг 2: Расчет шанса ---
-    stats = user_data.get('stats', {})
-    abilities = user_data.get('abilities', {})
-    inventory = user_data.get('inventory', [])
-
-    difficulty = await get_action_difficulty(player_action, world_context)
-    success_chance = calculate_action_chance(player_action, stats, abilities, inventory, difficulty)
-
-    # --- Шаг 3: Отображение шанса ---
-    chance_message = get_chance_message(success_chance)
-    await bot.edit_message_text(chat_id=message.chat.id, message_id=wait_message.message_id, text=chance_message)
-
-    # --- Шаг 4: Определение результата ---
+    # --- Шаг 2: Определение результата ---
     roll = random.random() * 100
     is_success = roll < success_chance
     outcome = "УСПЕХ" if is_success else "НЕУДАЧА"
 
-    logging.info(f"Action: {player_action}, Chance: {success_chance:.2f}, Roll: {roll:.2f}, Outcome: {outcome}")
+    logging.info(f"Action: {action}, Chance: {success_chance:.2f}, Roll: {roll:.2f}, Outcome: {outcome}")
 
-    # --- Шаг 5: Запрос исхода у ИИ ---
+    # --- Шаг 3: Запрос исхода у ИИ ---
     prompt_for_outcome = (
-        f"Игрок совершил действие: '{player_action}'.\n\n"
+        f"Игрок совершил действие: '{action}'.\n\n"
         f"Это действие было {outcome}ОМ.\n\n"
         f"Опиши подробный исход этого действия, исходя из результата ({outcome}). "
         f"Если неудача - опиши, почему не получилось. Если успех - опиши, что произошло. "
         f"Будь лаконичным, но красочным (не более 300 символов)."
     )
 
-    messages_history.append({"role": "user", "content": prompt_for_outcome})
-    response_text = await get_ai_response(messages_history)
+    session.messages.append({"role": "user", "content": prompt_for_outcome})
+    response_text = await get_ai_response(session.messages)
 
+    # Обработка добавления предметов
     processed_message, new_items = process_inventory_command(response_text)
     if new_items:
-        current_inventory_names = [item.lower() for item in inventory]
+        current_inventory_names = [item.lower() for item in session.inventory]
         for item in new_items:
             if item.lower() not in current_inventory_names:
-                inventory.append(item)
-        await state.update_data(inventory=inventory)
+                session.inventory.append(item)
 
-    messages_history.append({"role": "assistant", "content": response_text})
-    await state.update_data(messages=messages_history)
+    session.messages.append({"role": "assistant", "content": response_text})
 
-    new_world_context = await update_world_context(processed_message, world_context)
-    await state.update_data(world_context=new_world_context)
-    logging.info(f"World context updated: {new_world_context}")
+    # Обновление контекста мира
+    session.world_context = await update_world_context(processed_message, session.world_context)
+    session.last_active = datetime.now()
 
-    await message.answer(processed_message)
+    # Проверка на конец игры
+    game_over_keywords = ["умер", "погиб", "проиграл", "конец", "game over"]
+    game_over = any(keyword in processed_message.lower() for keyword in game_over_keywords)
+    if game_over:
+        session.game_over = True
+
+    return JSONResponse({
+        "success": True,
+        "action_result": processed_message,
+        "chance": success_chance,
+        "rolled": roll,
+        "outcome": outcome.lower(),
+        "new_items": new_items,
+        "inventory": session.inventory,
+        "health": session.health,
+        "game_over": session.game_over,
+        "world_context": session.world_context,
+        "type": "action_result"
+    })
 
 
-# --- РОУТЫ FASTAPI ---
+@app.post("/api/get-status")
+async def get_status(request: Request):
+    """Получение статуса игрока."""
+    data = await request.json()
+    user_id = data.get("user_id")
 
-@app.get("/")
-async def root():
-    """Корневой маршрут для проверки работы."""
-    return {"message": "RoleVerse Bot API is running!", "status": "active"}
+    if user_id not in user_sessions:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+
+    session = user_sessions[user_id]
+
+    return JSONResponse({
+        "inventory": session.inventory,
+        "stats": session.stats,
+        "abilities": list(session.abilities.keys()),
+        "health": session.health,
+        "character": session.character,
+        "world_context": session.world_context,
+        "game_over": session.game_over
+    })
+
+
+@app.post("/api/save-game")
+async def save_game(request: Request):
+    """Сохранение игры."""
+    data = await request.json()
+    user_id = data.get("user_id")
+
+    if user_id not in user_sessions:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+
+    session = user_sessions[user_id]
+
+    # В production здесь было бы сохранение в базу данных
+    save_data = {
+        "user_id": session.user_id,
+        "character": session.character,
+        "inventory": session.inventory,
+        "health": session.health,
+        "stats": session.stats,
+        "abilities": session.abilities,
+        "world_context": session.world_context,
+        "game_over": session.game_over,
+        "last_active": session.last_active.isoformat()
+    }
+
+    # Здесь можно сохранить в файл или базу данных
+    # Пока просто возвращаем данные
+    return JSONResponse({
+        "success": True,
+        "save_data": save_data,
+        "message": "Игра сохранена"
+    })
+
+
+@app.post("/api/load-game")
+async def load_game(request: Request):
+    """Загрузка сохраненной игры."""
+    data = await request.json()
+    user_id = data.get("user_id")
+    save_data = data.get("save_data")
+
+    if not save_data:
+        raise HTTPException(status_code=400, detail="Нет данных для загрузки")
+
+    # Создаем новую сессию из сохраненных данных
+    session = UserSession(
+        user_id=user_id,
+        character=save_data.get("character"),
+        inventory=save_data.get("inventory", []),
+        health=save_data.get("health", 100),
+        stats=save_data.get("stats", {}),
+        abilities=save_data.get("abilities", {}),
+        world_context=save_data.get("world_context", ""),
+        game_over=save_data.get("game_over", False)
+    )
+
+    user_sessions[user_id] = session
+
+    return JSONResponse({
+        "success": True,
+        "message": "Игра загружена",
+        "game_data": {
+            "inventory": session.inventory,
+            "stats": session.stats,
+            "abilities": list(session.abilities.keys()),
+            "health": session.health,
+            "character": session.character
+        }
+    })
+
+
+@app.post("/api/new-game")
+async def new_game(request: Request):
+    """Начать новую игру (сброс текущей)."""
+    data = await request.json()
+    user_id = data.get("user_id")
+
+    # Удаляем старую сессию
+    if user_id in user_sessions:
+        user_sessions.pop(user_id)
+
+    # Создаем новую сессию
+    new_user_id = generate_user_id()
+    session = UserSession(user_id=new_user_id)
+    user_sessions[new_user_id] = session
+
+    return JSONResponse({
+        "user_id": new_user_id,
+        "message": "Новая игра создана!",
+        "universes": [
+            {"id": "fantasy", "name": "🧙 Фэнтези", "description": "Мир магии и драконов"},
+            {"id": "cyberpunk", "name": "🚀 Киберпанк", "description": "Технологии и корпорации"},
+            {"id": "space", "name": "🪐 Космоопера", "description": "Межзвездные путешествия"},
+            {"id": "custom", "name": "🎨 Своя вселенная", "description": "Создайте свой мир"}
+        ]
+    })
+
+
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    """WebSocket соединение для real-time обновлений."""
+    await websocket.accept()
+    websocket_connections[user_id] = websocket
+
+    try:
+        while True:
+            # Поддерживаем соединение открытым
+            data = await websocket.receive_text()
+            # Можно обрабатывать сообщения от клиента
+            await websocket.send_json({
+                "type": "ping",
+                "data": {"message": "pong"}
+            })
+    except WebSocketDisconnect:
+        logging.info(f"WebSocket отключен для пользователя {user_id}")
+        websocket_connections.pop(user_id, None)
+    except Exception as e:
+        logging.error(f"Ошибка WebSocket: {e}")
+        websocket_connections.pop(user_id, None)
 
 
 @app.get("/health")
 async def health_check():
-    """Маршрут для проверки здоровья приложения."""
-    return JSONResponse(
-        content={
-            "status": "healthy",
-            "bot": await bot.get_me() is not None,
-            "webhook": (await bot.get_webhook_info()).url if WEBHOOK_URL else "Not set"
-        }
-    )
+    """Проверка здоровья приложения."""
+    return JSONResponse({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "active_sessions": len(user_sessions),
+        "active_connections": len(websocket_connections),
+        "ai_available": ds_client is not None
+    })
 
 
-@app.post(WEBHOOK_PATH)
-async def bot_webhook(request: Request):
-    """
-    Основной вебхук для получения обновлений от Telegram.
-    """
-    # Проверка секретного токена
-    if WEBHOOK_SECRET:
-        secret_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-        if secret_token != WEBHOOK_SECRET:
-            logging.warning(f"Неверный секретный токен: {secret_token}")
-            raise HTTPException(status_code=403, detail="Forbidden")
+@app.get("/api/clear-sessions")
+async def clear_sessions():
+    """Очистка всех сессий (для отладки)."""
+    count = len(user_sessions)
+    user_sessions.clear()
+    websocket_connections.clear()
 
-    # Получение и обработка обновления
-    try:
-        update_data = await request.json()
-        update = Update(**update_data)
+    return JSONResponse({
+        "message": f"Очищено {count} сессий",
+        "remaining_sessions": 0
+    })
 
-        # Асинхронная обработка обновления
-        asyncio.create_task(process_update(update))
-
-        return {"ok": True}
-    except Exception as e:
-        logging.error(f"Ошибка обработки вебхука: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"ok": False, "error": str(e)}
-        )
-
-
-async def process_update(update: Update):
-    """
-    Обработка обновления Telegram в фоновом режиме.
-    """
-    try:
-        await dp.feed_update(bot, update)
-    except Exception as e:
-        logging.error(f"Ошибка при обработке обновления: {e}")
-
-
-@app.get("/set-webhook")
-async def set_webhook_endpoint():
-    """
-    Ручная установка вебхука (для отладки).
-    """
-    try:
-        if not WEBHOOK_URL:
-            return {"error": "WEBHOOK_URL не установлен в .env файле"}
-
-        await bot.set_webhook(
-            url=f"{WEBHOOK_URL}{WEBHOOK_PATH}",
-            secret_token=WEBHOOK_SECRET,
-            drop_pending_updates=True
-        )
-        webhook_info = await bot.get_webhook_info()
-
-        return {
-            "success": True,
-            "webhook_url": webhook_info.url,
-            "pending_updates_count": webhook_info.pending_update_count
-        }
-    except Exception as e:
-        logging.error(f"Ошибка установки вебхука: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
-
-
-@app.get("/delete-webhook")
-async def delete_webhook_endpoint():
-    """
-    Удаление вебхука (для отладки).
-    """
-    try:
-        await bot.delete_webhook()
-        return {"success": True, "message": "Webhook deleted"}
-    except Exception as e:
-        logging.error(f"Ошибка удаления вебхука: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
-
-
-# Проверка переменных окружения при запуске
-def check_environment():
-    required_vars = ["TELEGRAM_BOT_TOKEN", "DEEPSEEK_API_KEY"]
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
-
-    if missing_vars:
-        logging.error(f"Отсутствуют обязательные переменные окружения: {missing_vars}")
-        return False
-
-    if not os.getenv("WEBHOOK_URL"):
-        logging.warning("WEBHOOK_URL не установлен. Используется URL Render по умолчанию.")
-
-    return True
-
-
-# Настройка для Render
-if os.getenv("RENDER"):
-    # Render автоматически устанавливает PORT
-    WEBAPP_PORT = int(os.getenv("PORT", 8000))
-    WEBAPP_HOST = "0.0.0.0"
-
-    # Генерация URL для вебхука на Render
-    if not WEBHOOK_URL:
-        render_service_name = os.getenv("RENDER_SERVICE_NAME", "roleverse-bot")
-        WEBHOOK_URL = f"https://{render_service_name}.onrender.com"
-        logging.info(f"Автоматически установлен WEBHOOK_URL: {WEBHOOK_URL}")
-
-if __name__ == "__main__":
-    if check_environment():
-        import uvicorn
-
-        logging.info(f"Запуск сервера на {WEBAPP_HOST}:{WEBAPP_PORT}")
-        uvicorn.run(
-            app,
-            host=WEBAPP_HOST,
-            port=WEBAPP_PORT,
-            log_level="info"
-        )
-    else:
-        logging.error("Не удалось запустить приложение из-за отсутствия переменных окружения")
-# Регистрация роутера aiogram
-dp.include_router(router)
 
 if __name__ == "__main__":
     import uvicorn
 
-    logging.info(f"Запуск сервера на {WEBAPP_HOST}:{WEBAPP_PORT}")
+    logging.info(f"Запуск RoleVerse Web App на {WEBAPP_HOST}:{WEBAPP_PORT}")
 
     uvicorn.run(
         app,
