@@ -587,6 +587,46 @@ async def delete_webhook_endpoint():
         )
 
 
+# Проверка переменных окружения при запуске
+def check_environment():
+    required_vars = ["TELEGRAM_BOT_TOKEN", "DEEPSEEK_API_KEY"]
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+
+    if missing_vars:
+        logging.error(f"Отсутствуют обязательные переменные окружения: {missing_vars}")
+        return False
+
+    if not os.getenv("WEBHOOK_URL"):
+        logging.warning("WEBHOOK_URL не установлен. Используется URL Render по умолчанию.")
+
+    return True
+
+
+# Настройка для Render
+if os.getenv("RENDER"):
+    # Render автоматически устанавливает PORT
+    WEBAPP_PORT = int(os.getenv("PORT", 8000))
+    WEBAPP_HOST = "0.0.0.0"
+
+    # Генерация URL для вебхука на Render
+    if not WEBHOOK_URL:
+        render_service_name = os.getenv("RENDER_SERVICE_NAME", "roleverse-bot")
+        WEBHOOK_URL = f"https://{render_service_name}.onrender.com"
+        logging.info(f"Автоматически установлен WEBHOOK_URL: {WEBHOOK_URL}")
+
+if __name__ == "__main__":
+    if check_environment():
+        import uvicorn
+
+        logging.info(f"Запуск сервера на {WEBAPP_HOST}:{WEBAPP_PORT}")
+        uvicorn.run(
+            app,
+            host=WEBAPP_HOST,
+            port=WEBAPP_PORT,
+            log_level="info"
+        )
+    else:
+        logging.error("Не удалось запустить приложение из-за отсутствия переменных окружения")
 # Регистрация роутера aiogram
 dp.include_router(router)
 
