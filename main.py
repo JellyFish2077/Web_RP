@@ -312,6 +312,83 @@ async def choose_universe(request: Request):
     })
 
 
+@app.post("/api/create-character-test")
+async def create_character_test(request: Request):
+    """Тестовое создание персонажа (без AI для тестирования)."""
+    data = await request.json()
+    user_id = data.get("user_id")
+    character_prompt = data.get("character_prompt")
+    universe_id = data.get("universe_id", "fantasy")
+
+    if user_id not in user_sessions:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+
+    session = user_sessions[user_id]
+
+    if not character_prompt:
+        character_prompt = "храбрый искатель приключений"
+
+    # Определяем вселенные
+    universes = {
+        "fantasy": {
+            "name": "Фэнтези",
+            "description": "Мир магии и драконов",
+            "rules": "Классическое фэнтези с магами, драконами и древними артефактами.",
+            "items": ["факел", "меч", "зелье здоровья", "карта древних руин"],
+            "stats": {"Сила": 9, "Ловкость": 7, "Интеллект": 6, "Мудрость": 5, "Харизма": 4},
+            "abilities": ["Магия", "Фехтование", "Выживание"]
+        },
+        "cyberpunk": {
+            "name": "Киберпанк",
+            "description": "Технологии и корпорации",
+            "rules": "Мир недалекого будущего, где технологии правят миром.",
+            "items": ["кибер-имплант", "пистолет", "нейро-стимуляторы", "хакерский набор"],
+            "stats": {"Сила": 6, "Ловкость": 8, "Интеллект": 9, "Мудрость": 5, "Харизма": 5},
+            "abilities": ["Взлом", "Кибернетика", "Скрытность"]
+        },
+        "space": {
+            "name": "Космоопера",
+            "description": "Межзвездные путешествия",
+            "rules": "Эпоха межзвездных путешествий и инопланетных цивилизаций.",
+            "items": ["бластер", "скафандр", "навигатор", "космический паёк"],
+            "stats": {"Сила": 7, "Ловкость": 8, "Интеллект": 7, "Мудрость": 6, "Харизма": 5},
+            "abilities": ["Пилотирование", "Инженерия", "Дипломатия"]
+        }
+    }
+
+    # Устанавливаем вселенную
+    universe = universes.get(universe_id, universes["fantasy"])
+    session.universe = universe_id
+    session.ruleset = universe["rules"]
+
+    # Создаем историю в зависимости от вселенной
+    stories = {
+        "fantasy": f"Вы - {character_prompt}. Вы стоите у входа в древние подземелья, где, по легендам, хранится магический артефакт. Ветер шепчет предупреждения, но ваше сердце жаждет приключений.",
+        "cyberpunk": f"Вы - {character_prompt}. Неоновые огни мегаполиса отражаются в лужах кислотного дождя. Корпорация «Кибертек» предлагает вам опасное задание - проникнуть в их же собственный секретный архив.",
+        "space": f"Вы - {character_prompt}. Ваш космический корабль совершил аварийную посадку на неизвестной планете. Сканеры показывают признаки разумной жизни, но связь с командованием потеряна."
+    }
+
+    story = stories.get(universe_id, stories["fantasy"])
+
+    # Устанавливаем значения по умолчанию
+    session.character = character_prompt
+    session.inventory = universe["items"]
+    session.stats = universe["stats"]
+    session.abilities = {ability: True for ability in universe["abilities"]}
+    session.world_context = story
+    session.last_active = datetime.now()
+
+    return JSONResponse({
+        "success": True,
+        "game_started": True,
+        "story": story,
+        "inventory": session.inventory,
+        "stats": session.stats,
+        "abilities": list(session.abilities.keys()),
+        "health": session.health,
+        "universe": universe["name"]
+    })
+
 @app.post("/api/create-character")
 async def create_character(request: Request):
     """Создание персонажа."""
