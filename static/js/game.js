@@ -96,6 +96,7 @@ class RoleVerseGame {
         });
 
         // Выбор вселенной - ИСПРАВЛЕНО
+        // Выбор вселенной
         this.elements.universeOptions.forEach(option => {
             option.addEventListener('click', () => {
                 // Снимаем выделение со всех вариантов
@@ -106,21 +107,40 @@ class RoleVerseGame {
                 // Выделяем выбранный
                 option.classList.add('selected');
 
-                // Сохраняем выбор
-                this.currentUniverse = option.getAttribute('data-universe');
-                this.showMessage('system', `Выбрана вселенная: ${option.querySelector('span').textContent}`);
+                const universeId = option.getAttribute('data-universe');
+                this.currentUniverse = universeId;
 
-                // Показываем поле для своей вселенной
-                if (this.currentUniverse === 'custom') {
+                // Показываем разные UI для своей и стандартных вселенных
+                if (universeId === 'custom') {
                     this.elements.customUniverse.classList.remove('hidden');
+                    this.elements.universeAction.classList.add('hidden');
+                    this.showMessage('system', '🎨 Вы выбрали создание своей вселенной. Опишите правила мира ниже.');
                 } else {
                     this.elements.customUniverse.classList.add('hidden');
-                    // Автоматически переходим к созданию персонажа
-                    setTimeout(() => {
-                        this.chooseUniverse(this.currentUniverse);
-                    }, 500);
+                    this.elements.universeAction.classList.remove('hidden');
+                    this.showMessage('system', `Выбрана вселенная: ${option.querySelector('span').textContent}`);
                 }
             });
+        });
+
+        // Кнопка подтверждения для своей вселенной
+        document.getElementById('confirm-custom-btn')?.addEventListener('click', () => {
+            this.proceedWithCustomUniverse();
+        });
+
+        // Кнопка отмены для своей вселенной
+        document.getElementById('cancel-custom-btn')?.addEventListener('click', () => {
+            this.elements.customUniverse.classList.add('hidden');
+            this.elements.universeOptions.forEach(opt => opt.classList.remove('selected'));
+            this.currentUniverse = null;
+            this.showMessage('system', 'Выбор вселенной отменен. Выберите другую вселенную.');
+        });
+
+        // Кнопка продолжить для стандартных вселенных
+        document.getElementById('proceed-btn')?.addEventListener('click', () => {
+            if (this.currentUniverse) {
+                this.chooseUniverse(this.currentUniverse);
+            }
         });
 
         // Создание персонажа
@@ -325,8 +345,142 @@ class RoleVerseGame {
         }
     }
 
-    // ... остальной код остается без изменений ...
+// ЗАМЕНИТЕ или ДОБАВЬТЕ в класс RoleVerseGame в game.js:
+
+async chooseUniverse(universeId) {
+    try {
+        this.showLoading('Загружаем вселенную...');
+
+        // Для своей вселенной нужны дополнительные действия
+        if (universeId === 'custom') {
+            // Показываем поле для ввода правил
+            this.elements.customUniverse.classList.remove('hidden');
+            this.showMessage('system', '🎨 Вы выбрали создание своей вселенной. Опишите правила мира в текстовом поле ниже, затем нажмите "Подтвердить".');
+
+            // Создаем кнопку подтверждения если ее нет
+            if (!document.getElementById('confirm-custom-universe')) {
+                const confirmBtn = document.createElement('button');
+                confirmBtn.id = 'confirm-custom-universe';
+                confirmBtn.className = 'btn btn-primary';
+                confirmBtn.innerHTML = '<i class="fas fa-check"></i> Подтвердить правила';
+                confirmBtn.style.marginTop = '10px';
+
+                confirmBtn.addEventListener('click', async () => {
+                    const customRules = this.elements.customRules.value.trim();
+                    if (!customRules) {
+                        this.showMessage('error', 'Пожалуйста, опишите правила вашей вселенной.');
+                        return;
+                    }
+
+                    await this.proceedWithCustomUniverse(customRules);
+                });
+
+                this.elements.customUniverse.appendChild(confirmBtn);
+            }
+
+            return; // Не продолжаем дальше, ждем подтверждения
+        }
+
+        // Для обычных вселенных продолжаем как обычно
+        const data = {
+            user_id: this.userId,
+            universe_id: universeId
+        };
+
+        const response = await fetch('/api/choose-universe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+
+        if (result.success && result.need_character) {
+            this.showMessage('system', '🌌 Вселенная выбрана! Теперь опишите своего персонажа.');
+            this.gameState = 'character_create';
+            this.updateUI();
+        } else {
+            await this.createCharacterTest(universeId);
+        }
+    } catch (error) {
+        console.error('Ошибка при выборе вселенной:', error);
+        await this.createCharacterTest(universeId);
+    } finally {
+        this.hideLoading();
+    }
 }
+
+async proceedWithCustomUniverse(customRules) {
+    try {
+        this.showLoading('Создаем вашу вселенную...');
+
+        const response = await fetch('/api/choose-universe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                user_id: this.userId,
+                universe_id: 'custom',
+                custom_rules: customRules
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success && result.need_character) {
+            this.showMessage('system', '🌌 Ваша вселенная создана! Теперь опишите персонажа для этого мира.');
+            this.gameState = 'character_create';
+            this.updateUI();
+        } else {
+            // Создаем персонажа в кастомной вселенной
+            await this.createCharacterForCustomUniverse(customRules);
+        }
+    } catch (error) {
+        console.error('Ошибка при создании кастомной вселенной:', error);
+        this.showMessage('error', 'Не удалось создать вселенную. Используем стандартную.');
+        await this.createCharacterTest('fantasy');
+    } finally {
+        this.hideLoading();
+    }
+}
+
+async createCharacterForCustomUniverse(customRules) {
+    const characterPrompt = this.elements.characterInput.value || "персонаж из моего мира";
+
+    try {
+        const response = await fetch('/api/create-character', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                user_id: this.userId,
+                character_prompt: characterPrompt
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success && data.game_started) {
+            this.showMessage('ai', data.story);
+            this.updateCharacterInfo(data);
+            this.gameState = 'playing';
+            this.updateUI();
+        }
+    } catch (error) {
+        console.error('Ошибка при создании персонажа:', error);
+        // Альтернативный вариант
+        const story = `Вы находитесь в мире, который вы сами создали:\n\n"${customRules.substring(0, 200)}..."\n\nКак ${characterPrompt}, вы начинаете свое приключение в этом уникальном мире.`;
+
+        this.showMessage('ai', story);
+        this.updateCharacterInfo({
+            story: story,
+            inventory: ["дневник создателя", "карта вашего мира", "ключ от тайных врат"],
+            stats: {"Сила": 7, "Ловкость": 7, "Интеллект": 9, "Мудрость": 8, "Харизма": 6},
+            abilities: ["Созидание", "Воображение", "Планирование"],
+            health: 100
+        });
+        this.gameState = 'playing';
+        this.updateUI();
+    }
+}}
 
 // Инициализация игры при загрузке страницы
 document.addEventListener('DOMContentLoaded', () => {
