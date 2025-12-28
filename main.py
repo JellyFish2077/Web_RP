@@ -47,7 +47,12 @@ logger = logging.getLogger("roleverse")
 WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0")
 WEBAPP_PORT = int(os.getenv("PORT", 8000))
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.getenv("REDIS_URL")
+if not REDIS_URL or not REDIS_URL.startswith("redis://"):
+    logger.warning("Redis URL not properly configured, using in-memory fallback")
+    REDIS_AVAILABLE = False
+else:
+    REDIS_AVAILABLE = True
 REDIS_TTL = int(os.getenv("REDIS_TTL", 3600))  # 1 час
 
 # Rate limiter
