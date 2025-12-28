@@ -93,7 +93,7 @@ async def get_ai_response(messages: list, temperature: float = 0.7) -> str:
                 json={
                     "model": "deepseek-chat",
                     "messages": messages,
-                    "max_tokens": 600,
+                    "max_tokens": 800,
                     "temperature": temperature,
                     "stream": False
                 },
@@ -102,41 +102,52 @@ async def get_ai_response(messages: list, temperature: float = 0.7) -> str:
 
             if response.status_code == 200:
                 data = response.json()
-                return data["choices"][0]["message"]["content"].strip()
+                content = data["choices"][0]["message"]["content"].strip()
+
+                # Форматируем ответ для лучшего отображения
+                formatted_content = format_ai_response(content)
+                return formatted_content
+
             else:
                 logging.error(f"DeepSeek API error: {response.status_code} - {response.text}")
-                # Fallback response
-                return "AI Мастер игры: Я понял ваше действие. История продолжается..."
+                return "Извините, произошла ошибка с нейросетью. Попробуйте еще раз."
 
     except httpx.TimeoutException:
         logging.error("Timeout while calling DeepSeek API")
         return "Извините, нейросеть не отвечает. Попробуйте еще раз."
     except Exception as e:
         logging.error(f"Error while calling DeepSeek API: {e}")
-        # Fallback для тестирования
-        return "AI Мастер игры: Ваше действие было успешным. Мир реагирует на ваши поступки."
+        return "Извините, произошла ошибка с нейросетью. Попробуйте еще раз."
 
 
-def get_chance_message(chance: float) -> str:
-    """Генерирует стилизованное и понятное сообщение для шанса действия."""
-    chance = round(chance)
+def format_ai_response(text: str) -> str:
+    """Форматирует ответ AI для лучшего отображения."""
+    # Убираем лишние пробелы
+    text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
 
-    if chance >= 80:
-        return f"✅ <b>Почти наверняка!</b>\n(Шанс: {chance}%)"
-    elif chance >= 60:
-        return f"👍 <b>Довольно неплохо.</b>\n(Шанс: {chance}%)"
-    elif chance >= 40:
-        return f"🤔 <b>Пятьдесят на пятьдесят.</b>\n(Шанс: {chance}%)"
-    elif chance >= 20:
-        return f"😰 <b>Рискованно...</b>\n(Шанс: {chance}%)"
-    else:
-        return f"⚠️ <b>Очень сомнительно.</b>\n(Шанс: {chance}%)"
+    # Добавляем форматирование для заголовков
+    lines = text.split('\n')
+    formatted_lines = []
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            formatted_lines.append('')
+            continue
+
+        # Определяем заголовки
+        if line.endswith(':') and len(line) < 50:
+            formatted_lines.append(f'**{line}**')
+        elif re.match(r'^[A-ZА-Я][^.!?]*[.!?]$', line) and len(line) < 100:
+            formatted_lines.append(f'*{line}*')
+        else:
+            formatted_lines.append(line)
+
+    return '\n'.join(formatted_lines)
 
 
 async def validate_action_logic(player_action: str, world_context: str) -> str:
-    """
-    Проверяет, является ли действие игрока логичным.
-    """
+    """Проверяет, является ли действие игрока логичным."""
     prompt = (
         f"Ты - Мастер Игры. Игрок пытается совершить действие: '{player_action}'. "
         f"Текущий контекст: '{world_context}'.\n\n"
@@ -146,7 +157,6 @@ async def validate_action_logic(player_action: str, world_context: str) -> str:
     )
     messages = [{"role": "user", "content": prompt}]
     validation_response = await get_ai_response(messages, temperature=0.3)
-
     return validation_response.strip()
 
 
@@ -249,6 +259,21 @@ def generate_user_id() -> str:
     return f"user_{random.randint(100000, 999999)}_{int(datetime.now().timestamp())}"
 
 
+def get_universe_story(universe_id: str, character_prompt: str) -> str:
+    """Возвращает тестовую историю для вселенной."""
+    stories = {
+        "fantasy": f"## 🐉 Фэнтези Мир\n\nВы - **{character_prompt}**. Стоите у входа в древние подземелья **Драконьего Пика**. \n\n*Легенды говорят*, что в самой глубине этих катакомб хранится **Потерянный Артефакт Древних** - магический кристалл, способный исполнить любое желание.\n\nСтраж у входа, старый гном по имени **Торрин**, кивает вам: \n- \"Много смельчаков вошло туда, немногие вернулись... Удачи, {character_prompt}.\"\n\n**Что будете делать?**",
+
+        "cyberpunk": f"## 🤖 Киберпанк Мир\n\nВы - **{character_prompt}**. Неоновые огни мегаполиса **\"Новая Токио-3\"** отражаются в лужах кислотного дождя.\n\nВаш нейро-коммуникатор вибрирует. *Новое сообщение*:\n\n> **От:** Анонимный Работодатель\n> **Тема:** Контракт #X7B-229\n> **Награда:** 50,000 крипто-кредитов\n> **Задание:** Проникнуть в серверную корпорации **\"КиберТек\"** и скачать чертежи нового импланта.\n> **Риск:** Максимальный. Системы безопасности уровня \"Альфа\".\n\n**Принимаете контракт?**",
+
+        "space": f"## 🚀 Космический Мир\n\nВы - **{character_prompt}**. Корабль **\"Звездный Странник\"** выходит из гиперпространства над планетой **Ксенон-7**.\n\n*Сканеры показывают:*\n- Атмосфера: пригодна для дыхания\n- Температура: +22°C\n- Аномалии: **неизвестные энергетические сигнатуры**\n- Жизнь: признаки разумной цивилизации\n\nКапитан **Алекс Рейдерс** отдает приказ через комсвязь:\n- \"Экипаж, готовьтесь к посадке. Миссия: исследовать и установить контакт.\"\n\n**Ваши действия?**",
+
+        "custom": "## 🎨 Ваша Вселенная\n\nВы стоите на пороге мира, который сами создали. Воздух пахнет возможностями, каждый камень хранит историю, которую вы еще не написали.\n\n*Это ваш мир. Ваши правила. Ваше приключение.*\n\n**С чего начнете?**"
+    }
+
+    return stories.get(universe_id, stories["fantasy"])
+
+
 # --- РОУТЫ FASTAPI ---
 
 @app.get("/", response_class=HTMLResponse)
@@ -288,6 +313,7 @@ async def choose_universe(request: Request):
     data = await request.json()
     user_id = data.get("user_id")
     universe_id = data.get("universe_id")
+    custom_rules = data.get("custom_rules", "")
 
     if user_id not in user_sessions:
         raise HTTPException(status_code=404, detail="Сессия не найдена")
@@ -299,7 +325,7 @@ async def choose_universe(request: Request):
         "fantasy": "Классическое фэнтези с магами, драконами и древними артефактами. Магия управляется мантрой и жезлами.",
         "cyberpunk": "Мир недалекого будущего, где технологии правят миром, кибернетические импланты - обыденность.",
         "space": "Эпоха межзвездных путешествий, инопланетных цивилизаций и космических битв.",
-        "custom": data.get("custom_rules", "Вы сами определяете законы мира.")
+        "custom": custom_rules or "Вы сами определяете законы мира."
     }
 
     session.universe = universe_id
@@ -308,86 +334,10 @@ async def choose_universe(request: Request):
     return JSONResponse({
         "success": True,
         "message": f"Вселенная выбрана! Теперь опишите своего персонажа.",
-        "need_character": True
+        "need_character": True,
+        "universe": universe_id
     })
 
-
-@app.post("/api/create-character-test")
-async def create_character_test(request: Request):
-    """Тестовое создание персонажа (без AI для тестирования)."""
-    data = await request.json()
-    user_id = data.get("user_id")
-    character_prompt = data.get("character_prompt")
-    universe_id = data.get("universe_id", "fantasy")
-
-    if user_id not in user_sessions:
-        raise HTTPException(status_code=404, detail="Сессия не найдена")
-
-    session = user_sessions[user_id]
-
-    if not character_prompt:
-        character_prompt = "храбрый искатель приключений"
-
-    # Определяем вселенные
-    universes = {
-        "fantasy": {
-            "name": "Фэнтези",
-            "description": "Мир магии и драконов",
-            "rules": "Классическое фэнтези с магами, драконами и древними артефактами.",
-            "items": ["факел", "меч", "зелье здоровья", "карта древних руин"],
-            "stats": {"Сила": 9, "Ловкость": 7, "Интеллект": 6, "Мудрость": 5, "Харизма": 4},
-            "abilities": ["Магия", "Фехтование", "Выживание"]
-        },
-        "cyberpunk": {
-            "name": "Киберпанк",
-            "description": "Технологии и корпорации",
-            "rules": "Мир недалекого будущего, где технологии правят миром.",
-            "items": ["кибер-имплант", "пистолет", "нейро-стимуляторы", "хакерский набор"],
-            "stats": {"Сила": 6, "Ловкость": 8, "Интеллект": 9, "Мудрость": 5, "Харизма": 5},
-            "abilities": ["Взлом", "Кибернетика", "Скрытность"]
-        },
-        "space": {
-            "name": "Космоопера",
-            "description": "Межзвездные путешествия",
-            "rules": "Эпоха межзвездных путешествий и инопланетных цивилизаций.",
-            "items": ["бластер", "скафандр", "навигатор", "космический паёк"],
-            "stats": {"Сила": 7, "Ловкость": 8, "Интеллект": 7, "Мудрость": 6, "Харизма": 5},
-            "abilities": ["Пилотирование", "Инженерия", "Дипломатия"]
-        }
-    }
-
-    # Устанавливаем вселенную
-    universe = universes.get(universe_id, universes["fantasy"])
-    session.universe = universe_id
-    session.ruleset = universe["rules"]
-
-    # Создаем историю в зависимости от вселенной
-    stories = {
-        "fantasy": f"Вы - {character_prompt}. Вы стоите у входа в древние подземелья, где, по легендам, хранится магический артефакт. Ветер шепчет предупреждения, но ваше сердце жаждет приключений.",
-        "cyberpunk": f"Вы - {character_prompt}. Неоновые огни мегаполиса отражаются в лужах кислотного дождя. Корпорация «Кибертек» предлагает вам опасное задание - проникнуть в их же собственный секретный архив.",
-        "space": f"Вы - {character_prompt}. Ваш космический корабль совершил аварийную посадку на неизвестной планете. Сканеры показывают признаки разумной жизни, но связь с командованием потеряна."
-    }
-
-    story = stories.get(universe_id, stories["fantasy"])
-
-    # Устанавливаем значения по умолчанию
-    session.character = character_prompt
-    session.inventory = universe["items"]
-    session.stats = universe["stats"]
-    session.abilities = {ability: True for ability in universe["abilities"]}
-    session.world_context = story
-    session.last_active = datetime.now()
-
-    return JSONResponse({
-        "success": True,
-        "game_started": True,
-        "story": story,
-        "inventory": session.inventory,
-        "stats": session.stats,
-        "abilities": list(session.abilities.keys()),
-        "health": session.health,
-        "universe": universe["name"]
-    })
 
 @app.post("/api/create-character")
 async def create_character(request: Request):
@@ -404,25 +354,34 @@ async def create_character(request: Request):
     if not character_prompt:
         raise HTTPException(status_code=400, detail="Необходимо описание персонажа")
 
-    # Создаем персонажа с помощью AI
-    full_prompt = (
-        f"Ты - Мастер Игры. Создай начало истории.\n\n"
-        f"ПРАВИЛА МИРА: {session.ruleset}\n"
-        f"ЖЕЛАНИЕ ИГРОКА: '{character_prompt}'.\n\n"
-        f"ЗАДАНИЕ:\n"
-        f"1. Создай краткое описание персонажа и стартовой локации. Опиши событие, с которого начинается игра.\n"
-        f"2. В конце добавь строки:\n"
-        f"INVENTORY_ADD: предмет1, предмет2, предмет3\n"
-        f"CHARACTER_DATA: {{\"stats\": {{\"Сила\": 8, \"Ловкость\": 7, \"Интеллект\": 6, \"Мудрость\": 5, \"Харизма\": 4}}, \"abilities\": {{\"Паркур\": true, \"Скрытность\": true}}}}"
-    )
+    # Создаем персонажа с помощью AI если доступен
+    if DEEPSEEK_API_KEY:
+        full_prompt = (
+            f"Ты - Мастер Игры. Создай начало истории.\n\n"
+            f"ПРАВИЛА МИРА: {session.ruleset}\n"
+            f"ЖЕЛАНИЕ ИГРОКА: '{character_prompt}'.\n\n"
+            f"ЗАДАНИЕ:\n"
+            f"1. Создай краткое, но атмосферное описание персонажа и стартовой локации (3-4 абзаца).\n"
+            f"2. Опиши событие, с которого начинается игра.\n"
+            f"3. Используй **жирный текст** для важных моментов и *курсив* для атмосферы.\n"
+            f"4. В конце добавь строки:\n"
+            f"INVENTORY_ADD: предмет1, предмет2, предмет3\n"
+            f"CHARACTER_DATA: {{\"stats\": {{\"Сила\": 8, \"Ловкость\": 7, \"Интеллект\": 6, \"Мудрость\": 5, \"Харизма\": 4}}, \"abilities\": {{\"Паркур\": true, \"Скрытность\": true}}}}"
+        )
 
-    messages = [{"role": "user", "content": full_prompt}]
-    response_text = await get_ai_response(messages)
-    logging.info(f"AI Response received: {len(response_text)} chars")
+        messages = [{"role": "user", "content": full_prompt}]
+        response_text = await get_ai_response(messages)
+        logging.info(f"AI Response received: {len(response_text)} chars")
 
-    items_to_add = process_inventory_command(response_text)[1]
-    stats, abilities = parse_character_data_block(response_text)
-    player_visible_message = clean_hidden_data(response_text)
+        items_to_add = process_inventory_command(response_text)[1]
+        stats, abilities = parse_character_data_block(response_text)
+        player_visible_message = clean_hidden_data(response_text)
+    else:
+        # Если AI не доступен, используем тестовые данные
+        player_visible_message = get_universe_story(session.universe or "fantasy", character_prompt)
+        items_to_add = ["факел", "нож", "фляга с водой"]
+        stats = {"Сила": 8, "Ловкость": 7, "Интеллект": 6, "Мудрость": 5, "Харизма": 4}
+        abilities = {"Выживание": True, "Наблюдение": True}
 
     # Если не удалось распарсить, используем значения по умолчанию
     if not stats:
@@ -433,22 +392,26 @@ async def create_character(request: Request):
         items_to_add = ["факел", "бутылка воды", "карта"]
 
     # Обновляем сессию
-    session.character = player_visible_message or f"Персонаж: {character_prompt}"
+    session.character = character_prompt
     session.inventory = items_to_add
     session.stats = stats
     session.abilities = abilities
-    session.messages = [{"role": "assistant", "content": response_text}]
+    session.messages = [{"role": "assistant", "content": player_visible_message}]
     session.world_context = player_visible_message.strip() or "Новый мир только начинает свою историю."
     session.last_active = datetime.now()
+
+    # Форматируем финальный ответ
+    final_story = f"## 🎮 Начало приключения\n\n{player_visible_message}\n\n**🎭 Ваш персонаж:** {character_prompt}\n**❤️ Здоровье:** {session.health}/100\n**🎒 Инвентарь:** {', '.join(items_to_add)}"
 
     return JSONResponse({
         "success": True,
         "game_started": True,
-        "story": player_visible_message or f"Вы начинаете как {character_prompt} в мире {session.universe}.",
+        "story": final_story,
         "inventory": items_to_add,
         "stats": stats,
         "abilities": list(abilities.keys()),
-        "health": session.health
+        "health": session.health,
+        "universe": session.universe
     })
 
 
@@ -495,17 +458,17 @@ async def perform_action(request: Request):
     # Определение результата
     roll = random.random() * 100
     is_success = roll < success_chance
-    outcome = "УСПЕХ" if is_success else "НЕУДАЧА"
+    outcome = "успех" if is_success else "неудача"
 
     logging.info(f"Action: {action}, Chance: {success_chance:.2f}, Roll: {roll:.2f}, Outcome: {outcome}")
 
     # Запрос исхода у ИИ
     prompt_for_outcome = (
         f"Игрок совершил действие: '{action}'.\n\n"
-        f"Это действие было {outcome}ОМ.\n\n"
+        f"Это действие было {outcome.upper()}ОМ.\n\n"
         f"Опиши подробный исход этого действия, исходя из результата ({outcome}). "
         f"Если неудача - опиши, почему не получилось. Если успех - опиши, что произошло. "
-        f"Будь лаконичным (не более 300 символов)."
+        f"Будь красочным и атмосферным (3-4 предложения). Используй **жирный текст** для важных моментов."
     )
 
     session.messages.append({"role": "user", "content": prompt_for_outcome})
@@ -530,12 +493,16 @@ async def perform_action(request: Request):
 
     session.last_active = datetime.now()
 
+    # Форматируем ответ
+    outcome_icon = "✅" if is_success else "❌"
+    formatted_result = f"## 📖 Результат действия\n\n{processed_message}\n\n---\n🎲 **Шанс успеха:** {success_chance:.0f}%\n🎯 **Выпало:** {roll:.0f}\n{outcome_icon} **Результат:** {outcome}"
+
     return JSONResponse({
         "success": True,
-        "action_result": processed_message,
+        "action_result": formatted_result,
         "chance": success_chance,
         "rolled": roll,
-        "outcome": outcome.lower(),
+        "outcome": outcome,
         "new_items": new_items,
         "inventory": session.inventory,
         "health": session.health,

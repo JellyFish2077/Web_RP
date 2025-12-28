@@ -67,55 +67,38 @@
                 <!-- Выбор вселенной -->
                 <div class="universe-selector" id="universe-selector">
                     <h4><i class="fas fa-globe"></i> Выберите вселенную</h4>
-                    <p class="help-text">Нажмите на иконку вселенной для выбора</p>
 
                     <div class="universe-options">
                         <div class="universe-option" data-universe="fantasy">
                             <i class="fas fa-hat-wizard"></i>
                             <span>Фэнтези</span>
-                            <small>Магия и драконы</small>
                         </div>
                         <div class="universe-option" data-universe="cyberpunk">
                             <i class="fas fa-robot"></i>
                             <span>Киберпанк</span>
-                            <small>Технологии будущего</small>
                         </div>
                         <div class="universe-option" data-universe="space">
                             <i class="fas fa-rocket"></i>
                             <span>Космоопера</span>
-                            <small>Космические путешествия</small>
                         </div>
-                        <div class="universe-option custom-option" data-universe="custom">
+                        <div class="universe-option" data-universe="custom">
                             <i class="fas fa-palette"></i>
-                            <span>Своя вселенная</span>
-                            <small>Создайте свой мир</small>
-                            <div class="custom-note">Требует описания</div>
+                            <span>Своя</span>
                         </div>
                     </div>
 
                     <!-- Блок для своей вселенной -->
                     <div id="custom-universe" class="hidden">
-                        <div class="custom-universe-form">
-                            <h5><i class="fas fa-edit"></i> Опишите вашу вселенную</h5>
-                            <textarea id="custom-rules"
-                                     placeholder="Пример: 'Мир, где магия и технологии сосуществуют. Маги управляют роботами через заклинания. Существуют летающие города и подземные лабиринты.'"
-                                     rows="4"></textarea>
-                            <div class="form-actions">
-                                <button id="confirm-custom-btn" class="btn btn-primary">
-                                    <i class="fas fa-check-circle"></i> Создать вселенную
-                                </button>
-                                <button id="cancel-custom-btn" class="btn btn-secondary">
-                                    <i class="fas fa-times"></i> Отмена
-                                </button>
-                            </div>
+                        <textarea id="custom-rules"
+                                 placeholder="Опишите правила вашей вселенной..."></textarea>
+                        <div class="form-actions">
+                            <button id="confirm-custom-btn" class="btn btn-primary">
+                                <i class="fas fa-check-circle"></i> Создать вселенную
+                            </button>
+                            <button id="cancel-custom-btn" class="btn btn-secondary">
+                                <i class="fas fa-times"></i> Отмена
+                            </button>
                         </div>
-                    </div>
-
-                    <!-- Кнопка продолжить для стандартных вселенных -->
-                    <div class="universe-action hidden" id="standard-universe-action">
-                        <button id="proceed-btn" class="btn btn-primary">
-                            <i class="fas fa-arrow-right"></i> Продолжить
-                        </button>
                     </div>
                 </div>
                 <!-- Создание персонажа -->
